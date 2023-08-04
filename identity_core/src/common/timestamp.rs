@@ -53,10 +53,7 @@ impl Timestamp {
   /// See the [`datetime` DID-core specification](https://www.w3.org/TR/did-core/#production).
   #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
   pub fn now_utc() -> Self {
-    let milliseconds_since_unix_epoch: i64 = js_sys::Date::now() as i64;
-    let seconds: i64 = milliseconds_since_unix_epoch / 1000;
-    // expect is okay, we assume the current time is between 0AD and 9999AD
-    Self::from_unix(seconds).expect("Timestamp failed to convert system datetime")
+    todo!("Timestamp::now_utc")
   }
 
   /// Returns the `Timestamp` as an [RFC 3339](https://tools.ietf.org/html/rfc3339) `String`.
