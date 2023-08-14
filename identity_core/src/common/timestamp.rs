@@ -53,7 +53,14 @@ impl Timestamp {
   /// See the [`datetime` DID-core specification](https://www.w3.org/TR/did-core/#production).
   #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
   pub fn now_utc() -> Self {
-    todo!("Timestamp::now_utc")
+    Self(truncate_fractional_seconds(
+      OffsetDateTime::from_unix_timestamp(
+        (ic_cdk::api::time() / 1_000_000_000)
+          .try_into()
+          .expect("Failed converting to u64"),
+      )
+      .expect("Wrong unix timestamp"),
+    ))
   }
 
   /// Returns the `Timestamp` as an [RFC 3339](https://tools.ietf.org/html/rfc3339) `String`.

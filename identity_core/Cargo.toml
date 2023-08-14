@@ -12,6 +12,7 @@ rust-version.workspace = true
 description = "The core traits and types for the identity-rs library."
 
 [dependencies]
+ic-cdk = "0.10"
 iota-crypto = { version = "0.23", default-features = false, features = ["sha", "x25519", "std"] }
 multibase = { version = "0.9", default-features = false, features = ["std"] }
 serde = { workspace = true, features = ["std"] }
