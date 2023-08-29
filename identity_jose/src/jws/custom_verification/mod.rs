@@ -6,4 +6,5 @@ mod iccs_jws_verifier;
 mod jws_verifier;
 
 pub use error::*;
+pub use iccs_jws_verifier::*;
 pub use jws_verifier::*;
