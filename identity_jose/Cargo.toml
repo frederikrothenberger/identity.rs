@@ -12,10 +12,18 @@ rust-version.workspace = true
 description = "A library for JOSE (JSON Object Signing and Encryption)"
 
 [dependencies]
+candid = "0.9"
+hex = "0.4"
+ic-certification = "0.24.1"
+ic-certified-map = "0.4"
+ic-verify-bls-signature = "0.2"
 identity_core = { version = "0.7.0-alpha.6", path = "../identity_core", default-features = false }
 iota-crypto = { version = "0.23", default-features = false, features = ["std", "sha"] }
 serde.workspace = true
+serde_cbor = "0.11"
+serde_bytes = "0.11"
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
+sha2 = "^0.10" # set bound to match ic-certified-map bound
 subtle = { version = "2.5", default-features = false }
 thiserror.workspace = true
 zeroize = { version = "1.6", default-features = false, features = ["std", "zeroize_derive"] }
@@ -23,10 +31,12 @@ zeroize = { version = "1.6", default-features = false, features = ["std", "zeroi
 [features]
 # Enables jws verification based on the EdDSA algorithm.
 eddsa = ["iota-crypto/ed25519"]
-default = ["eddsa"]
+iccs = []
+default = ["eddsa", "iccs"]
 
 [dev-dependencies]
 anyhow = "1"
+assert_matches = "1.5.0"
 iota-crypto = { version = "0.23", features = ["ed25519", "random", "hmac"] }
 p256 = { version = "0.12.0", default-features = false, features = ["std", "ecdsa", "ecdsa-core"] }
 signature = { version = "2", default-features = false }
