@@ -1,7 +1,9 @@
 use super::*;
-use crate::jwk::{Jwk, JwkType};
-use crate::jws::{Decoder, JwsValidationItem, JwsVerifier, SignatureVerificationError, SignatureVerificationErrorKind};
-use crate::jwu::decode_b64;
+use crate::jwk::{BlsCurve, Jwk, JwkParamsOkp, JwkType};
+use crate::jws::{
+  Decoder, JwsAlgorithm, JwsHeader, JwsVerifier, SignatureVerificationError, SignatureVerificationErrorKind,
+};
+use crate::jwu::{decode_b64, encode_b64};
 use candid::Principal;
 use ic_certification::{Certificate, HashTree, LookupResult};
 use ic_certified_map::Hash;
@@ -74,28 +76,21 @@ impl TryFrom<&[u8]> for IcCsPublicKey {
 }
 
 impl IcCsJwsVerifier {
-  pub fn verify_iccs(input: VerificationInput, public_key: &Jwk) -> Result<(), SignatureVerificationError> {
+  pub fn verify_iccs(input: VerificationInput, bls_pk_jwk: &Jwk) -> Result<(), SignatureVerificationError> {
     let iccs_sig: IcCsSig = serde_cbor::from_slice(&input.decoded_signature)
       .map_err(|e| invalid_signature_err(&format!("signature parsing error: {}", e)))?;
-    let certificate: Certificate = serde_cbor::from_slice(iccs_sig.certificate.as_ref())
+    let ic_certificate: Certificate = serde_cbor::from_slice(iccs_sig.certificate.as_ref())
       .map_err(|e| key_decoding_err(&format!("certificate parsing error: {}", e)))?;
 
-    public_key
-      .check_alg("IcCs")
-      .map_err(|e| unsupported_alg_err(&format!("iccs not supported: {}", e)))?;
-    // Per https://datatracker.ietf.org/doc/html/rfc7518#section-6.4,
-    // JwkParamsOct are for symmetric keys or another key whose value is a single octet sequence.
-    let key_params = public_key
-      .try_oct_params()
-      .map_err(|e| key_decoding_err(&format!("oct-params not found : {}", e)))?;
-    let pubkey_bytes =
-      decode_b64(key_params.k.as_bytes()).map_err(|e| key_decoding_err(&format!("oct-params parsing error: {}", e)))?;
-    let iccs_pk = IcCsPublicKey::try_from(pubkey_bytes.as_slice())?;
+    let jws_header = input
+      .protected_header
+      .ok_or(invalid_signature_err("missing protected header in verification input"))?;
+    let iccs_pk = get_canister_signing_pk(&jws_header)?;
 
     ///// Check if root hash of the signatures hash tree matches the certified data in the certificate
     let certified_data_path = [b"canister", iccs_pk.signing_canister_id.as_slice(), b"certified_data"];
     // Get value of the certified data in the certificate
-    let witness = match certificate.tree.lookup_path(&certified_data_path) {
+    let witness = match ic_certificate.tree.lookup_path(&certified_data_path) {
       LookupResult::Found(witness) => witness,
       _ => {
         return Err(invalid_signature_err(&format!(
@@ -116,7 +111,7 @@ impl IcCsJwsVerifier {
 
     ///// Check canister-specific certification path.
     let seed_hash = hash_bytes_sha256(&iccs_pk.seed);
-    let signing_input_hash = id_alias_signing_input_hash(&input.signing_input);
+    let signing_input_hash = verifiable_credential_signing_input_hash(&input.signing_input);
     let cert_sig_path = [b"sig", &seed_hash[..], &signing_input_hash[..]];
     match iccs_sig.tree.lookup_path(&cert_sig_path) {
       LookupResult::Found(_) => {}
@@ -127,9 +122,9 @@ impl IcCsJwsVerifier {
       }
     }
 
-    /////  TODO: Verify BLS signature on the root hash.
-
-    Ok(())
+    /////  Verify BLS signature on the root hash.
+    let root_pk = get_root_pk(bls_pk_jwk)?;
+    verify_root_signature(&root_pk, &ic_certificate)
   }
 }
 
@@ -175,7 +170,7 @@ fn hash_bytes_sha256(bytes: &[u8]) -> Hash {
   hasher.finalize().into()
 }
 
-fn id_alias_signing_input_hash(signing_input: &[u8]) -> Hash {
+fn verifiable_credential_signing_input_hash(signing_input: &[u8]) -> Hash {
   let sep = b"iccs_verifiable_credential";
   let mut hasher = Sha256::new();
   let buf = [sep.len() as u8];
@@ -185,8 +180,7 @@ fn id_alias_signing_input_hash(signing_input: &[u8]) -> Hash {
   hasher.finalize().into()
 }
 
-fn get_canister_signing_pk(jws: &JwsValidationItem) -> Result<IcCsPublicKey, SignatureVerificationError> {
-  let jws_header = jws.protected_header().ok_or(key_decoding_err("missing JWS header"))?;
+fn get_canister_signing_pk(jws_header: &JwsHeader) -> Result<IcCsPublicKey, SignatureVerificationError> {
   let jwk = jws_header
     .deref()
     .jwk()
@@ -194,6 +188,8 @@ fn get_canister_signing_pk(jws: &JwsValidationItem) -> Result<IcCsPublicKey, Sig
   if jwk.alg() != Some("IcCs") {
     return Err(unsupported_alg_err("expected IcCs"));
   }
+  // Per https://datatracker.ietf.org/doc/html/rfc7518#section-6.4,
+  // JwkParamsOct are for symmetric keys or another key whose value is a single octet sequence.
   if jwk.kty() != JwkType::Oct {
     return Err(unsupported_alg_err("expected JWK of type oct"));
   }
@@ -203,12 +199,54 @@ fn get_canister_signing_pk(jws: &JwsValidationItem) -> Result<IcCsPublicKey, Sig
   let pk_der = decode_b64(jwk_params.k.as_bytes()).map_err(|_| key_decoding_err("invalid base64url encoding"))?;
   IcCsPublicKey::try_from(pk_der.as_slice())
 }
-/// Verifies the specified JWS credential against the given canister signatures' public key
-/// and the root public key.
-// TODO: enable customized path checking via a function-parameter
-// TODO: enable validation of claims
+
+fn get_root_pk(bls_pk_jwk: &Jwk) -> Result<Vec<u8>, SignatureVerificationError> {
+  if bls_pk_jwk.alg() != Some("Bls12381") {
+    return Err(unsupported_alg_err("expected Bls12381"));
+  }
+  // Per https://datatracker.ietf.org/doc/html/rfc7518#section-6.4,
+  // JwkParamsOct are for symmetric keys or another key whose value is a single octet sequence.
+  if bls_pk_jwk.kty() != JwkType::Okp {
+    return Err(unsupported_alg_err("expected JWK of type okp"));
+  }
+  let jwk_params = bls_pk_jwk
+    .try_okp_params()
+    .map_err(|_| key_decoding_err("missing JWK okp params"))?;
+  if jwk_params.crv != "Bls12381G1" {
+    return Err(key_decoding_err(&format!("unsupported curve {}", jwk_params.crv)));
+  }
+  let pk_der = decode_b64(jwk_params.x.as_bytes()).map_err(|_| key_decoding_err("invalid base64url encoding"))?;
+  if pk_der.len() != IC_ROOT_KEY_LENGTH {
+    return Err(key_decoding_err(&format!(
+      "expected {} bytes for BLS public key",
+      IC_ROOT_KEY_LENGTH
+    )));
+  }
+  Ok(pk_der)
+}
+
+// cf. https://datatracker.ietf.org/doc/draft-ietf-cose-bls-key-representations/
+// currently JwkParamsOkp does not have y-field, so putting the entire public key into x,
+// according to the serialization of ic_verify_bls_signature::PublicKey.
+pub fn bls_pk_jwk(ic_root_pk_der: &[u8], kid: &str) -> Result<Jwk, SignatureVerificationError> {
+  let mut public_key_jwk = Jwk::new(JwkType::Okp);
+  public_key_jwk.set_kid(kid);
+  public_key_jwk.set_alg("Bls12381");
+  let pk_bytes = extract_ic_root_key_from_der(ic_root_pk_der)?;
+  public_key_jwk
+    .set_params(JwkParamsOkp {
+      crv: BlsCurve::Bls12381G1.name().to_owned(),
+      x: encode_b64(pk_bytes),
+      d: None,
+    })
+    .unwrap();
+  public_key_jwk.set_alg(JwsAlgorithm::Bls12381.to_string());
+  Ok(public_key_jwk)
+}
+
+/// Verifies the specified JWS credential against the given root public key.
 #[allow(dead_code)]
-pub fn verify_id_alias_jws(credential_jws: &str, ic_root_pk_der: &[u8]) -> Result<(), SignatureVerificationError> {
+pub fn verify_credential_jws(credential_jws: &str, ic_root_pk_der: &[u8]) -> Result<(), SignatureVerificationError> {
   ///// Decode JWS.
   let decoder: Decoder = Decoder::new();
   let jws = decoder
@@ -216,14 +254,15 @@ pub fn verify_id_alias_jws(credential_jws: &str, ic_root_pk_der: &[u8]) -> Resul
     .map_err(|e| key_decoding_err(&format!("credential JWS parsing error: {}", e)))?;
   let iccs_sig: IcCsSig = serde_cbor::from_slice(&jws.decoded_signature())
     .map_err(|e| invalid_signature_err(&format!("signature parsing error: {}", e)))?;
-  let certificate: Certificate = serde_cbor::from_slice(iccs_sig.certificate.as_ref())
+  let ic_certificate: Certificate = serde_cbor::from_slice(iccs_sig.certificate.as_ref())
     .map_err(|e| key_decoding_err(&format!("certificate parsing error: {}", e)))?;
-  let iccs_pk = get_canister_signing_pk(&jws)?;
+  let jws_header = jws.protected_header().ok_or(key_decoding_err("missing JWS header"))?;
+  let iccs_pk = get_canister_signing_pk(&jws_header)?;
 
   ///// Check if root hash of the signatures hash tree matches the certified data in the certificate
   let certified_data_path = [b"canister", iccs_pk.signing_canister_id.as_slice(), b"certified_data"];
   // Get value of the certified data in the certificate
-  let witness = match certificate.tree.lookup_path(&certified_data_path) {
+  let witness = match ic_certificate.tree.lookup_path(&certified_data_path) {
     LookupResult::Found(witness) => witness,
     _ => {
       return Err(invalid_signature_err(&format!(
@@ -244,7 +283,7 @@ pub fn verify_id_alias_jws(credential_jws: &str, ic_root_pk_der: &[u8]) -> Resul
 
   ///// Check canister-specific certification path.
   let seed_hash = hash_bytes_sha256(&iccs_pk.seed);
-  let signing_input_hash = id_alias_signing_input_hash(jws.signing_input());
+  let signing_input_hash = verifiable_credential_signing_input_hash(jws.signing_input());
   let cert_sig_path = [b"sig", &seed_hash[..], &signing_input_hash[..]];
   match iccs_sig.tree.lookup_path(&cert_sig_path) {
     LookupResult::Found(_) => {}
@@ -256,20 +295,25 @@ pub fn verify_id_alias_jws(credential_jws: &str, ic_root_pk_der: &[u8]) -> Resul
   }
 
   ///// Verify BLS signature on the root hash.
-  let root_key = extract_ic_root_key_from_der(ic_root_pk_der)?;
-  let root_hash = certificate.tree.digest();
+  let root_pk = extract_ic_root_key_from_der(ic_root_pk_der)?;
+  verify_root_signature(&root_pk, &ic_certificate)
+}
+
+fn verify_root_signature(root_pk: &[u8], ic_certificate: &Certificate) -> Result<(), SignatureVerificationError> {
+  let root_hash = ic_certificate.tree.digest();
   let mut msg = vec![];
   msg.extend_from_slice(IC_STATE_ROOT_DOMAIN_SEPARATOR);
   msg.extend_from_slice(&root_hash);
-  if verify_bls_signature(&certificate.signature, &msg, &root_key).is_err() {
+  if verify_bls_signature(&ic_certificate.signature, &msg, &root_pk).is_err() {
     return Err(invalid_signature_err("invalid BLS signature"));
   }
-
   Ok(())
 }
+
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::jwk::{JwkParams, JwkParamsOkp};
   use crate::jws::JwsAlgorithm;
   use assert_matches::assert_matches;
 
@@ -283,12 +327,12 @@ mod tests {
 
   #[test]
   fn should_verify_id_alias_vc_jws() {
-    verify_id_alias_jws(ID_ALIAS_CREDENTIAL_JWS, &ic_root_pk_der()).expect("JWS verification failed");
+    verify_credential_jws(ID_ALIAS_CREDENTIAL_JWS, &ic_root_pk_der()).expect("JWS verification failed");
   }
 
   #[test]
   fn should_not_verify_id_alias_vc_jws_without_canister_pk() {
-    let result = verify_id_alias_jws(ID_ALIAS_CREDENTIAL_JWS_NO_JWK, &ic_root_pk_der());
+    let result = verify_credential_jws(ID_ALIAS_CREDENTIAL_JWS_NO_JWK, &ic_root_pk_der());
     assert_matches!(result, Err(e) if e.to_string().contains("missing JWK in JWS header"));
   }
 
@@ -296,7 +340,7 @@ mod tests {
   fn should_not_verify_id_alias_vc_jws_with_wrong_root_pk() {
     let mut ic_root_pk_der = ic_root_pk_der();
     ic_root_pk_der[IC_ROOT_KEY_DER_PREFIX.len()] = ic_root_pk_der[IC_ROOT_KEY_DER_PREFIX.len()] + 1; // change the root pk value
-    let result = verify_id_alias_jws(ID_ALIAS_CREDENTIAL_JWS, &ic_root_pk_der);
+    let result = verify_credential_jws(ID_ALIAS_CREDENTIAL_JWS, &ic_root_pk_der);
     assert_matches!(result, Err(e) if e.to_string().contains("invalid BLS signature"));
   }
 
@@ -310,9 +354,9 @@ mod tests {
       alg: JwsAlgorithm::IcCs,
       signing_input: Box::from(jws.signing_input()),
       decoded_signature: Box::from(jws.decoded_signature()),
+      protected_header: Some(jws.protected_header().expect("missing protected header").clone()),
     };
-    let jws_header = jws.protected_header().expect("missing JWS header");
-    let jwk = jws_header.deref().jwk().expect("missing JWK in JWS header");
-    IcCsJwsVerifier::verify_iccs(verification_input, &jwk).expect("JWS verification failed");
+    let bls_pk_jwk = bls_pk_jwk(&ic_root_pk_der(), "did:ic:0x123#ic-root-public-key").expect("invalid root pk");
+    IcCsJwsVerifier::verify_iccs(verification_input, &bls_pk_jwk).expect("JWS verification failed");
   }
 }

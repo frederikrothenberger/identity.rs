@@ -160,6 +160,7 @@ impl<'a> JwsValidationItem<'a> {
       alg,
       signing_input,
       decoded_signature,
+      protected_header: Some(protected.clone()),
     };
     // Call verifier
     verifier

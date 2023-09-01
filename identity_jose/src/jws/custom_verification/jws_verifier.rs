@@ -3,7 +3,7 @@
 
 use super::SignatureVerificationError;
 use crate::jwk::Jwk;
-use crate::jws::JwsAlgorithm;
+use crate::jws::{JwsAlgorithm, JwsHeader};
 
 #[cfg(any(feature = "eddsa", doc))]
 pub use eddsa_verifier::*;
@@ -19,6 +19,8 @@ pub struct VerificationInput {
   pub signing_input: Box<[u8]>,
   /// The decoded signature to validate the `signing_input` against in the manner defined by the `alg` field.
   pub decoded_signature: Box<[u8]>,
+  /// The decoded headers of the JWS.
+  pub protected_header: Option<JwsHeader>,
 }
 
 /// Trait for cryptographically verifying a JWS signature.
