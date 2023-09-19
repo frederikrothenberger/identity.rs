@@ -333,6 +333,7 @@ fn verify_root_signature(
   let mut msg = vec![];
   msg.extend_from_slice(IC_STATE_ROOT_DOMAIN_SEPARATOR);
   msg.extend_from_slice(&root_hash);
+
   if verify_bls_signature(&ic_certificate.signature, &msg, &signing_pk).is_err() {
     return Err(invalid_signature_err("invalid BLS signature"));
   }
@@ -351,13 +352,15 @@ fn validate_delegation(
       Ok(root_pk.to_owned())
     }
     Some(delegation) => {
-      let cert: Certificate = serde_cbor::from_slice(&delegation.certificate).unwrap();
-      let _ = verify_root_signature(&cert, signing_canister_id);
+      let cert: Certificate = serde_cbor::from_slice(&delegation.certificate)
+        .map_err(|_| invalid_signature_err("Failed parsing CBOR delegation certificate"))?;
+      let _ = verify_root_signature(&cert, signing_canister_id)?;
       let canister_range_path = [b"subnet", delegation.subnet_id.as_slice(), b"canister_ranges"];
       let LookupResult::Found(canister_range) = cert.tree.lookup_path(&canister_range_path) else {
         return Err(invalid_signature_err("Delegation invalid"));
       };
-      let ranges: Vec<(Principal, Principal)> = serde_cbor::from_slice(canister_range).unwrap();
+      let ranges: Vec<(Principal, Principal)> = serde_cbor::from_slice(canister_range)
+        .map_err(|_| invalid_signature_err("Failed parsing CBOR delegation canister range"))?;
       if !principal_is_within_ranges(&signing_canister_id, &ranges[..]) {
         return Err(invalid_signature_err(
           "The certificate is not authorized to answer calls for this canister",
@@ -368,7 +371,8 @@ fn validate_delegation(
       let LookupResult::Found(pk) = cert.tree.lookup_path(&public_key_path) else {
         return Err(invalid_signature_err("Invalid delegation"));
       };
-      Ok(pk.to_vec())
+      let raw_pk = extract_ic_root_key_from_der(pk)?;
+      Ok(raw_pk)
     }
   }
 }
@@ -379,7 +383,18 @@ mod tests {
   use crate::jws::JwsAlgorithm;
   use assert_matches::assert_matches;
   use candid::Principal;
+  use ic_cbor::CertificateToCbor;
+  use ic_certification_testing::CertificateBuilder;
+  use ic_response_verification_test_utils::AssetTree;
   use serial_test::serial;
+
+  fn principal_from_u64(i: u64) -> Principal {
+    let mut bytes: Vec<u8> = i.to_be_bytes().to_vec();
+    // Append 0x01 twice, to be compatible with CanisterId::from_u64() used by response_verification
+    bytes.push(0x01);
+    bytes.push(0x01);
+    Principal::from_slice(&bytes)
+  }
 
   const TEST_SIGNING_CANISTER_ID: &str = "rwlgt-iiaaa-aaaaa-aaaaa-cai";
   const TEST_IC_ROOT_PK_B64URL: &str = "MIGCMB0GDSsGAQQBgtx8BQMBAgEGDCsGAQQBgtx8BQMCAQNhAK32VjilMFayIiyRuyRXsCdLypUZilrL2t_n_XIXjwab3qjZnpR52Ah6Job8gb88SxH-J1Vw1IHxaY951Giv4OV6zB4pj4tpeY2nqJG77Blwk-xfR1kJkj1Iv-1oQ9vtHw";
@@ -399,7 +414,6 @@ mod tests {
   }
 
   #[test]
-  #[serial]
   fn should_not_verify_id_alias_vc_jws_without_canister_pk() {
     let signing_canister_id = Principal::from_text(TEST_SIGNING_CANISTER_ID).expect("failed parsing canister id");
     let result = verify_credential_jws(ID_ALIAS_CREDENTIAL_JWS_NO_JWK, signing_canister_id);
@@ -433,5 +447,79 @@ mod tests {
     };
     let bls_pk_jwk = bls_pk_jwk(&test_ic_root_pk_der(), "did:ic:0x123#ic-root-public-key").expect("invalid root pk");
     IcCsJwsVerifier::verify_iccs(verification_input, &bls_pk_jwk).expect("JWS verification failed");
+  }
+
+  #[test]
+  #[serial]
+  fn should_verify_root_signature_without_delegation() {
+    let signing_canister_id = Principal::from_text(TEST_SIGNING_CANISTER_ID).expect("failed parsing canister id");
+
+    let ic_cert_data =
+      CertificateBuilder::new(&signing_canister_id.to_string(), &AssetTree::new().get_certified_data())
+        .expect("CertificateBuilder creation failed")
+        .build()
+        .expect("Certificate creation failed");
+    set_ic_root_public_key_for_testing(ic_cert_data.root_key);
+    let ic_certificate =
+      Certificate::from_cbor(&ic_cert_data.cbor_encoded_certificate).expect("CBOR cert parsing failed");
+
+    verify_root_signature(&ic_certificate, signing_canister_id).expect("Verification without delegation failed");
+  }
+
+  #[test]
+  #[serial]
+  fn should_verify_root_signature_with_delegation() {
+    let signing_canister_id = principal_from_u64(5);
+    let subnet_id = 123u64;
+    let ic_cert_data =
+      CertificateBuilder::new(&signing_canister_id.to_string(), &AssetTree::new().get_certified_data())
+        .expect("CertificateBuilder creation failed")
+        .with_delegation(subnet_id, vec![(0, 10)])
+        .build()
+        .expect("Certificate creation failed");
+    set_ic_root_public_key_for_testing(ic_cert_data.root_key);
+    let ic_certificate =
+      Certificate::from_cbor(&ic_cert_data.cbor_encoded_certificate).expect("CBOR cert parsing failed");
+
+    verify_root_signature(&ic_certificate, signing_canister_id).expect("Verification with delegation failed");
+  }
+
+  #[test]
+  #[serial]
+  fn should_fail_verify_root_signature_with_delegation_if_canister_not_in_range() {
+    let signing_canister_id = principal_from_u64(42);
+    let subnet_id = 123u64;
+    let ic_cert_data =
+      CertificateBuilder::new(&signing_canister_id.to_string(), &AssetTree::new().get_certified_data())
+        .expect("CertificateBuilder creation failed")
+        .with_delegation(subnet_id, vec![(0, 10)])
+        .build()
+        .expect("Certificate creation failed");
+    set_ic_root_public_key_for_testing(ic_cert_data.root_key);
+    let ic_certificate =
+      Certificate::from_cbor(&ic_cert_data.cbor_encoded_certificate).expect("CBOR cert parsing failed");
+
+    let result = verify_root_signature(&ic_certificate, signing_canister_id);
+    assert_matches!(result, Err(e) if e.to_string().contains("not authorized to answer calls for this canister"));
+  }
+
+  #[test]
+  #[serial]
+  fn should_fail_verify_root_signature_with_delegation_if_invalid_signature() {
+    let signing_canister_id = principal_from_u64(5);
+    let subnet_id = 123u64;
+    let ic_cert_data =
+      CertificateBuilder::new(&signing_canister_id.to_string(), &AssetTree::new().get_certified_data())
+        .expect("CertificateBuilder creation failed")
+        .with_delegation(subnet_id, vec![(0, 10)])
+        .with_invalid_signature()
+        .build()
+        .expect("Certificate creation failed");
+    set_ic_root_public_key_for_testing(ic_cert_data.root_key);
+    let ic_certificate =
+      Certificate::from_cbor(&ic_cert_data.cbor_encoded_certificate).expect("CBOR cert parsing failed");
+
+    let result = verify_root_signature(&ic_certificate, signing_canister_id);
+    assert_matches!(result, Err(e) if e.to_string().contains("invalid BLS signature"));
   }
 }
