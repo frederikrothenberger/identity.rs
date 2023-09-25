@@ -13,13 +13,12 @@ description = "A library for JOSE (JSON Object Signing and Encryption)"
 
 [dependencies]
 candid = "0.9"
+canister_sig_util = { git = "https://github.com/dfinity/internet-identity.git", branch = "vc-mvp-2"}
 hex = "0.4"
-ic-certification = { git = "https://github.com/dfinity/response-verification.git" }
+ic-certification = "0.24.1"
 ic-certified-map = "0.4"
-ic-verify-bls-signature = "0.2"
 identity_core = { version = "0.7.0-alpha.6", path = "../identity_core", default-features = false }
 iota-crypto = { version = "0.23", default-features = false, features = ["std", "sha"] }
-lazy_static = "1.4"
 serde.workspace = true
 serde_cbor = "0.11"
 serde_bytes = "0.11"
@@ -38,9 +37,6 @@ default = ["eddsa", "iccs"]
 [dev-dependencies]
 anyhow = "1"
 assert_matches = "1.5.0"
-ic-cbor= { git = "https://github.com/dfinity/response-verification.git" }
-ic-certification-testing = { git = "https://github.com/dfinity/response-verification.git" }
-ic-response-verification-test-utils = { git = "https://github.com/dfinity/response-verification.git" }
 iota-crypto = { version = "0.23", features = ["ed25519", "random", "hmac"] }
 p256 = { version = "0.12.0", default-features = false, features = ["std", "ecdsa", "ecdsa-core"] }
 signature = { version = "2", default-features = false }
