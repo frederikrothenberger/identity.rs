@@ -15,4 +15,4 @@ pub use self::presentation::Presentation;
 pub use self::presentation_builder::PresentationBuilder;
 
 #[cfg(feature = "validator")]
-pub(crate) use self::jwt_serialization::PresentationJwtClaims;
+pub use self::jwt_serialization::PresentationJwtClaims;
