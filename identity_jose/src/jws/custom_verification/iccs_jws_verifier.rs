@@ -2,13 +2,8 @@ use super::*;
 use crate::jwk::{BlsCurve, Jwk, JwkParamsOkp, JwkType};
 use crate::jws::{JwsAlgorithm, JwsHeader, JwsVerifier, SignatureVerificationError, SignatureVerificationErrorKind};
 use crate::jwu::{decode_b64, encode_b64};
-use candid::Principal;
-use canister_sig_util::verify_root_signature;
-use ic_certification::{Certificate, HashTree, LookupResult};
-use ic_certified_map::Hash;
-use serde::{Deserialize, Serialize};
-use serde_bytes::ByteBuf;
-use sha2::{Digest, Sha256};
+use ic_crypto_standalone_sig_verifier::verify_canister_sig;
+use ic_types::crypto::threshold_sig::IcRootOfTrust;
 use std::ops::Deref;
 
 const IC_ROOT_KEY_DER_PREFIX: &[u8; 37] = b"\x30\x81\x82\x30\x1d\x06\x0d\x2b\x06\x01\x04\x01\x82\xdc\x7c\x05\x03\x01\x02\x01\x06\x0c\x2b\x06\x01\x04\x01\x82\xdc\x7c\x05\x03\x02\x01\x03\x61\x00";
@@ -29,99 +24,19 @@ const CANISTER_KEY_DER_OID: &[u8; 14] = b"\x30\x0C\x06\x0A\x2B\x06\x01\x04\x01\x
 #[non_exhaustive]
 pub struct IcCsJwsVerifier;
 
-#[derive(Serialize, Deserialize)]
-struct IcCsSig {
-  certificate: ByteBuf,
-  tree: HashTree,
-}
-
-#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
-struct IcCsPublicKey {
-  signing_canister_id: Principal,
-  #[serde(with = "serde_bytes")]
-  seed: Vec<u8>,
-}
-
-impl TryFrom<&[u8]> for IcCsPublicKey {
-  type Error = SignatureVerificationError;
-
-  fn try_from(der_pubkey_bytes: &[u8]) -> Result<Self, Self::Error> {
-    // TODO: check the entire DER-structure.
-    let oid_part = &der_pubkey_bytes[2..(CANISTER_KEY_DER_OID.len() + 2)];
-    if oid_part[..] != CANISTER_KEY_DER_OID[..] {
-      return Err(key_decoding_err("invalid OID of canister key"));
-    }
-    let bitstring_offset: usize = CANISTER_KEY_DER_PREFIX_LENGTH;
-    let canister_id_len: usize = if der_pubkey_bytes.len() > bitstring_offset {
-      usize::from(der_pubkey_bytes[bitstring_offset])
-    } else {
-      return Err(key_decoding_err("canister key shorter than DER prefix"));
-    };
-    if der_pubkey_bytes.len() < (bitstring_offset + 1 + canister_id_len) {
-      return Err(key_decoding_err("canister key too short"));
-    }
-    let canister_id_raw = &der_pubkey_bytes[(bitstring_offset + 1)..(bitstring_offset + 1 + canister_id_len)];
-    let seed = &der_pubkey_bytes[bitstring_offset + canister_id_len + 1..];
-
-    let canister_id = Principal::try_from_slice(canister_id_raw)
-      .map_err(|e| key_decoding_err(&format!("invalid canister id in canister pk: {}", e)))?;
-    Ok(IcCsPublicKey {
-      signing_canister_id: canister_id,
-      seed: seed.to_vec(),
-    })
-  }
-}
-
 impl IcCsJwsVerifier {
-  pub fn verify_iccs(input: VerificationInput, _bls_pk_jwk: &Jwk) -> Result<(), SignatureVerificationError> {
-    let iccs_sig: IcCsSig = serde_cbor::from_slice(&input.decoded_signature)
-      .map_err(|e| invalid_signature_err(&format!("signature parsing error: {}", e)))?;
-    let ic_certificate: Certificate = serde_cbor::from_slice(iccs_sig.certificate.as_ref())
-      .map_err(|e| key_decoding_err(&format!("certificate parsing error: {}", e)))?;
-
+  pub fn verify_iccs(input: VerificationInput, bls_pk_jwk: &Jwk) -> Result<(), SignatureVerificationError> {
+    let signature = &input.decoded_signature;
+    let message = signing_input_with_prefix(&input.signing_input);
     let jws_header = input
       .protected_header
       .ok_or(invalid_signature_err("missing protected header in verification input"))?;
-    let iccs_pk = get_canister_signing_pk(&jws_header)?;
+    let canister_sig_pk = get_canister_sig_pk_bytes(&jws_header)?;
 
-    ///// Check if root hash of the signatures hash tree matches the certified data in the certificate
-    let certified_data_path = [b"canister", iccs_pk.signing_canister_id.as_slice(), b"certified_data"];
-    // Get value of the certified data in the certificate
-    let witness = match ic_certificate.tree.lookup_path(&certified_data_path) {
-      LookupResult::Found(witness) => witness,
-      _ => {
-        return Err(invalid_signature_err(&format!(
-          "certificate tree has no certified data witness for canister {} (0x{})",
-          iccs_pk.signing_canister_id.to_text(),
-          hex::encode(iccs_pk.signing_canister_id.as_slice())
-        )))
-      }
-    };
-    // Recompute the root hash of the signatures hash tree
-    let digest = iccs_sig.tree.digest();
-
-    if witness != digest {
-      return Err(invalid_signature_err(
-        "certificate tree witness doesn't match signature tree digest",
-      ));
-    }
-
-    ///// Check canister-specific certification path.
-    let seed_hash = hash_bytes_sha256(&iccs_pk.seed);
-    let signing_input_hash = verifiable_credential_signing_input_hash(&input.signing_input);
-    let cert_sig_path = [b"sig", &seed_hash[..], &signing_input_hash[..]];
-    match iccs_sig.tree.lookup_path(&cert_sig_path) {
-      LookupResult::Found(_) => {}
-      _ => {
-        return Err(invalid_signature_err(
-          "missing signature path in canister's certified data",
-        ))
-      }
-    }
-
-    /////  Verify BLS signature on the root hash.
-    verify_root_signature(&ic_certificate, iccs_pk.signing_canister_id)
-      .map_err(|e| invalid_signature_err(&format!("{:?}", e)))
+    let root_pk_bytes: [u8; 96] = bls_pk_raw_from_jwk(bls_pk_jwk)?;
+    let root_pk = IcRootOfTrust::from(root_pk_bytes);
+    verify_canister_sig(&message, signature, canister_sig_pk.as_slice(), root_pk)
+      .map_err(|e| invalid_signature_err(&format!("signature verification error: {}", e)))
   }
 }
 
@@ -161,23 +76,15 @@ fn extract_ic_root_key_from_der(buf: &[u8]) -> Result<Vec<u8>, SignatureVerifica
   Ok(key.to_vec())
 }
 
-fn hash_bytes_sha256(bytes: &[u8]) -> Hash {
-  let mut hasher = Sha256::new();
-  hasher.update(bytes);
-  hasher.finalize().into()
-}
-
-fn verifiable_credential_signing_input_hash(signing_input: &[u8]) -> Hash {
+pub fn signing_input_with_prefix(signing_input: &[u8]) -> Vec<u8> {
   let sep = b"iccs_verifiable_credential";
-  let mut hasher = Sha256::new();
-  let buf = [sep.len() as u8];
-  hasher.update(buf);
-  hasher.update(sep);
-  hasher.update(signing_input);
-  hasher.finalize().into()
+  let mut result = Vec::from([sep.len() as u8]);
+  result.extend_from_slice(sep);
+  result.extend_from_slice(signing_input);
+  result
 }
 
-fn get_canister_signing_pk(jws_header: &JwsHeader) -> Result<IcCsPublicKey, SignatureVerificationError> {
+fn get_canister_sig_pk_bytes(jws_header: &JwsHeader) -> Result<Vec<u8>, SignatureVerificationError> {
   let jwk = jws_header
     .deref()
     .jwk()
@@ -194,7 +101,25 @@ fn get_canister_signing_pk(jws_header: &JwsHeader) -> Result<IcCsPublicKey, Sign
     .try_oct_params()
     .map_err(|_| key_decoding_err("missing JWK oct params"))?;
   let pk_der = decode_b64(jwk_params.k.as_bytes()).map_err(|_| key_decoding_err("invalid base64url encoding"))?;
-  IcCsPublicKey::try_from(pk_der.as_slice())
+  let pk_raw = canister_sig_pk_raw(pk_der.as_slice()).map_err(|e| key_decoding_err(&e.to_string()))?;
+  Ok(pk_raw)
+}
+
+pub fn canister_sig_pk_raw(der_pubkey_bytes: &[u8]) -> Result<Vec<u8>, SignatureVerificationError> {
+  let oid_part = &der_pubkey_bytes[2..(CANISTER_KEY_DER_OID.len() + 2)];
+  if oid_part[..] != CANISTER_KEY_DER_OID[..] {
+    return Err(key_decoding_err("invalid OID of canister key"));
+  }
+  let bitstring_offset: usize = CANISTER_KEY_DER_PREFIX_LENGTH;
+  let canister_id_len: usize = if der_pubkey_bytes.len() > bitstring_offset {
+    usize::from(der_pubkey_bytes[bitstring_offset])
+  } else {
+    return Err(key_decoding_err("canister key shorter than DER prefix"));
+  };
+  if der_pubkey_bytes.len() < (bitstring_offset + 1 + canister_id_len) {
+    return Err(key_decoding_err("canister key too short"));
+  }
+  Ok(der_pubkey_bytes[(bitstring_offset)..].to_vec())
 }
 
 // cf. https://datatracker.ietf.org/doc/draft-ietf-cose-bls-key-representations/
@@ -216,12 +141,30 @@ pub fn bls_pk_jwk(ic_root_pk_der: &[u8], kid: &str) -> Result<Jwk, SignatureVeri
   Ok(public_key_jwk)
 }
 
+pub fn bls_pk_raw_from_jwk(jwk: &Jwk) -> Result<[u8; 96], SignatureVerificationError> {
+  if jwk.alg() != Some("Bls12381") {
+    return Err(unsupported_alg_err("expected Bls12381"));
+  }
+  if jwk.kty() != JwkType::Okp {
+    return Err(unsupported_alg_err("expected JWK of type okp"));
+  }
+  let jwk_params = jwk
+    .try_okp_params()
+    .map_err(|_| key_decoding_err("missing JWK okp params"))?;
+  if jwk_params.crv != BlsCurve::Bls12381G1.name() {
+    return Err(unsupported_alg_err("expected Bls12381G1 curve"));
+  }
+  let pk_raw = decode_b64(jwk_params.x.as_bytes()).map_err(|_| key_decoding_err("invalid base64url encoding"))?;
+  let pk_bytes: [u8; 96] = pk_raw
+    .try_into()
+    .map_err(|e| key_decoding_err(&format!("invalid bls public key: {:?}", e)))?;
+  Ok(pk_bytes)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::jws::{Decoder, JwsAlgorithm};
-  use canister_sig_util::set_ic_root_public_key_for_testing;
-  use serial_test::serial;
 
   const TEST_IC_ROOT_PK_B64URL: &str = "MIGCMB0GDSsGAQQBgtx8BQMBAgEGDCsGAQQBgtx8BQMCAQNhAK32VjilMFayIiyRuyRXsCdLypUZilrL2t_n_XIXjwab3qjZnpR52Ah6Job8gb88SxH-J1Vw1IHxaY951Giv4OV6zB4pj4tpeY2nqJG77Blwk-xfR1kJkj1Iv-1oQ9vtHw";
   const ID_ALIAS_CREDENTIAL_JWS: &str = "eyJqd2siOnsia3R5Ijoib2N0IiwiYWxnIjoiSWNDcyIsImsiOiJNRHd3REFZS0t3WUJCQUdEdUVNQkFnTXNBQW9BQUFBQUFBQUFBQUVCamxUYzNvSzVRVU9SbUt0T3YyVXBhMnhlQW5vNEJ4RlFFYmY1VWRUSTZlYyJ9LCJraWQiOiJkaWQ6aWM6aWktY2FuaXN0ZXIiLCJhbGciOiJJY0NzIn0.eyJpc3MiOiJodHRwczovL2ludGVybmV0Y29tcHV0ZXIub3JnL2lzc3VlcnMvaW50ZXJuZXQtaWRlbml0eSIsIm5iZiI6MTYyMDMyODYzMCwianRpIjoiaHR0cHM6Ly9pbnRlcm5ldGNvbXB1dGVyLm9yZy9jcmVkZW50aWFsL2ludGVybmV0LWlkZW5pdHkiLCJzdWIiOiJkaWQ6d2ViOmNwZWhxLTU0aGVmLW9kamp0LWJvY2tsLTNsZHRnLWpxbGU0LXlzaTVyLTZiZmFoLXY2bHNhLXhwcmR2LXBxZSIsInZjIjp7IkBjb250ZXh0IjoiaHR0cHM6Ly93d3cudzMub3JnLzIwMTgvY3JlZGVudGlhbHMvdjEiLCJ0eXBlIjpbIlZlcmlmaWFibGVDcmVkZW50aWFsIiwiSW50ZXJuZXRJZGVudGl0eUlkQWxpYXMiXSwiY3JlZGVudGlhbFN1YmplY3QiOnsiaGFzX2lkX2FsaWFzIjoiZGlkOndlYjpzMzNxYy1jdG5wNS11Ynl6NC1rdWJxby1wMnRlbS1oZTRscy02ajIzai1od3diYS0zN3pibC10Mmx2My1wYWUifX19.2dn3omtjZXJ0aWZpY2F0ZVkBi9nZ96JkdHJlZYMBgwGDAYMCSGNhbmlzdGVygwJKAAAAAAAAAAABAYMBgwGDAYMCTmNlcnRpZmllZF9kYXRhggNYIODv9b076dlspbUFOyPWJHgYNK9z1_e5ch1_xbztAGgGggRYINLM_z_MXakw3sDoSiVB5lhRa0uxUB5w6LQQ5phqBX1gggRYIBfmGXVF1WCWPapsKI5MoFLJ55x11hQqSb_sRnrp5hFVggRYIMJ9utEUSVVFIqnKBAQ0yrssMWD36ZH2cUb60yoTOzKAggRYIAL_4M5TY9ONUOV0m4NnJ0sP4qs6Dbmt_TfyJW2VcHCtggRYILRWoDKnWsPosTjq1xLq2WPAg0ONkxqUY8Gr7IJiDAYdgwGCBFggNVP2WB1Ts90nZG9hyLDaCww4gbhXxtw8R-poiMET62uDAkR0aW1lggNJgLiu1N2JpL4WaXNpZ25hdHVyZVgwheosd0fsVnQbYtorM71pkwAG4ENhEI84F_xk7uwBeY_4DlNnMdTHFYpLErOXbuS3ZHRyZWWDAYIEWCDvRfWrF74pofmWJkBxcTtb2rClPh4tQ3qWj25MVh-S64MCQ3NpZ4MCWCA6UuW6rWVPRqQn_k-pP9kMNe6RKs1gj7QVCsaG4Bx2OYMBgwJYIDAugH-BjrALnLxVtfR0ayNY5_9_Vc9oVt-H5hpWFVWXggNAggRYIC0ZLl16DWYaDIXJg88YBHdXKqdVgPyXZaZtE6_LgyZR";
@@ -231,9 +174,7 @@ mod tests {
   }
 
   #[test]
-  #[serial]
   fn should_verify_id_alias_via_jws_verifier() {
-    set_ic_root_public_key_for_testing(test_ic_root_pk_der());
     let decoder: Decoder = Decoder::new();
     let jws = decoder
       .decode_compact_serialization(ID_ALIAS_CREDENTIAL_JWS.as_ref(), None)
