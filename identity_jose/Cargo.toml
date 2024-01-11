@@ -12,8 +12,8 @@ rust-version.workspace = true
 description = "A library for JOSE (JSON Object Signing and Encryption)"
 
 [dependencies]
-ic-crypto-standalone-sig-verifier = { git = "https://github.com/dfinity/ic", rev = "bf9bc00b032a18d2dbcfcfcfb7a76a562f350c9e" }
-ic-types = { git = "https://github.com/dfinity/ic", rev = "bf9bc00b032a18d2dbcfcfcfb7a76a562f350c9e" }
+ic-crypto-standalone-sig-verifier = { git = "https://github.com/dfinity/ic", rev = "e69bcc7b319cbb3ebc22ec55af35287741244db6" }
+ic-types = { git = "https://github.com/dfinity/ic", rev = "e69bcc7b319cbb3ebc22ec55af35287741244db6" }
 identity_core = { version = "0.7.0-alpha.6", path = "../identity_core", default-features = false }
 iota-crypto = { version = "0.23", default-features = false, features = ["std", "sha"] }
 serde.workspace = true
