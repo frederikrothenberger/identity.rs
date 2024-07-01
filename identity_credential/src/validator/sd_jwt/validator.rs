@@ -10,7 +10,7 @@ use crate::validator::JwtCredentialValidator;
 use crate::validator::JwtCredentialValidatorUtils;
 use crate::validator::JwtValidationError;
 use crate::validator::SignerContext;
-use identity_core::common::Timestamp;
+use identity_core::common::{TimeProvider, Timestamp};
 use identity_core::convert::FromJson;
 use identity_did::CoreDID;
 use identity_did::DIDUrl;
@@ -68,7 +68,7 @@ impl<V: JwsVerifier> SdJwtCredentialValidator<V> {
   ///
   /// # Errors
   /// An error is returned whenever a validated condition is not satisfied.
-  pub fn validate_credential<DOC, T>(
+  pub fn validate_credential<DOC, T, TP>(
     &self,
     sd_jwt: &SdJwt,
     issuer: &DOC,
@@ -78,6 +78,7 @@ impl<V: JwsVerifier> SdJwtCredentialValidator<V> {
   where
     T: ToOwned<Owned = T> + serde::Serialize + serde::de::DeserializeOwned,
     DOC: AsRef<CoreDocument>,
+    TP: TimeProvider,
   {
     let issuers = std::slice::from_ref(issuer.as_ref());
     let credential = self
@@ -86,7 +87,7 @@ impl<V: JwsVerifier> SdJwtCredentialValidator<V> {
         validation_errors: [err].into(),
       })?;
 
-    JwtCredentialValidator::<V>::validate_decoded_credential(credential, issuers, options, fail_fast)
+    JwtCredentialValidator::<V>::validate_decoded_credential::<_, _, TP>(credential, issuers, options, fail_fast)
   }
 
   /// Decode and verify the JWS signature of a [`Credential`] issued as an SD-JWT using the DID Document of a trusted
@@ -167,7 +168,7 @@ impl<V: JwsVerifier> SdJwtCredentialValidator<V> {
   ///   * `typ` value in KB-JWT header.
   ///   * `sd_hash` claim value in the KB-JWT claim.
   ///   * Optional `nonce`, `aud` and issuance date validation.
-  pub fn validate_key_binding_jwt<DOC>(
+  pub fn validate_key_binding_jwt<DOC, TP>(
     &self,
     sd_jwt: &SdJwt,
     holder: &DOC,
@@ -175,6 +176,7 @@ impl<V: JwsVerifier> SdJwtCredentialValidator<V> {
   ) -> Result<KeyBindingJwtClaims, KeyBindingJwtError>
   where
     DOC: AsRef<CoreDocument>,
+    TP: TimeProvider,
   {
     // Check if KB exists in the SD-JWT.
     let kb_jwt = if let Some(kb_jwt) = &sd_jwt.key_binding_jwt {
@@ -285,7 +287,7 @@ impl<V: JwsVerifier> SdJwtCredentialValidator<V> {
           "value is later than `latest_issuance_date`".to_string(),
         ));
       }
-    } else if issuance_date > Timestamp::now_utc() {
+    } else if issuance_date > TP::now_utc() {
       return Err(KeyBindingJwtError::IssuanceDate("value is in the future".to_string()));
     }
 

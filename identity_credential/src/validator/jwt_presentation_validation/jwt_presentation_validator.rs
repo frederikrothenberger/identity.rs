@@ -1,7 +1,7 @@
 // Copyright 2020-2023 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use identity_core::common::Object;
+use identity_core::common::{Object, TimeProvider};
 use identity_core::common::Timestamp;
 use identity_core::common::Url;
 use identity_core::convert::FromJson;
@@ -60,7 +60,7 @@ where
   /// # Errors
   ///
   /// An error is returned whenever a validated condition is not satisfied or when decoding fails.
-  pub fn validate<HDOC, CRED, T>(
+  pub fn validate<HDOC, CRED, T, TP>(
     &self,
     presentation: &Jwt,
     holder: &HDOC,
@@ -70,6 +70,7 @@ where
     HDOC: AsRef<CoreDocument> + ?Sized,
     T: ToOwned<Owned = T> + serde::Serialize + serde::de::DeserializeOwned,
     CRED: ToOwned<Owned = CRED> + serde::Serialize + serde::de::DeserializeOwned + Clone,
+    TP: TimeProvider,
   {
     // Verify JWS.
     let decoded_jws: DecodedJws<'_> = holder
@@ -117,7 +118,7 @@ where
       })
       .transpose()?;
 
-    (expiration_date.is_none() || expiration_date >= Some(options.earliest_expiry_date.unwrap_or_default()))
+    (expiration_date.is_none() || expiration_date >= Some(options.earliest_expiry_date.unwrap_or_else(TP::now_utc)))
       .then_some(())
       .ok_or(CompoundJwtPresentationValidationError::one_presentation_error(
         JwtValidationError::ExpirationDate,
@@ -139,7 +140,7 @@ where
       None => None,
     };
 
-    (issuance_date.is_none() || issuance_date <= Some(options.latest_issuance_date.unwrap_or_default()))
+    (issuance_date.is_none() || issuance_date <= Some(options.latest_issuance_date.unwrap_or_else(TP::now_utc)))
       .then_some(())
       .ok_or(CompoundJwtPresentationValidationError::one_presentation_error(
         JwtValidationError::IssuanceDate,

@@ -5,7 +5,7 @@ use core::fmt::Debug;
 use core::fmt::Display;
 use core::fmt::Formatter;
 
-use identity_core::common::Object;
+use identity_core::common::{Object, TimeProvider};
 use identity_core::common::Timestamp;
 use identity_core::convert::FmtJson;
 use serde::Deserialize;
@@ -36,8 +36,8 @@ pub struct IotaDocumentMetadata {
 impl IotaDocumentMetadata {
   /// Creates a new `IotaDocumentMetadata` with the current system datetime used for `created`
   /// and `updated` timestamps.
-  pub fn new() -> Self {
-    let now: Timestamp = Timestamp::now_utc();
+  pub fn new<TP: TimeProvider>() -> Self {
+    let now: Timestamp = TP::now_utc();
     Self {
       created: Some(now),
       updated: Some(now),
@@ -56,12 +56,6 @@ impl IotaDocumentMetadata {
   /// Returns a mutable reference to the custom metadata properties.
   pub fn properties_mut(&mut self) -> &mut Object {
     &mut self.properties
-  }
-}
-
-impl Default for IotaDocumentMetadata {
-  fn default() -> Self {
-    Self::new()
   }
 }
 

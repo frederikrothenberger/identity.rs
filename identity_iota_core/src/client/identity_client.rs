@@ -3,7 +3,7 @@
 
 #[cfg(feature = "test")]
 use iota_sdk::client::Client;
-
+use identity_core::common::TimeProvider;
 use crate::block::address::Address;
 use crate::block::output::feature::SenderFeature;
 use crate::block::output::unlock_condition::GovernorAddressUnlockCondition;
@@ -138,12 +138,12 @@ pub trait IotaIdentityClientExt: IotaIdentityClient {
   ///
   /// - [`NetworkMismatch`](Error::NetworkMismatch) if the network of the DID and client differ.
   /// - [`NotFound`](iota_sdk::client::Error::NoOutput) if the associated Alias Output was not found.
-  async fn resolve_did(&self, did: &IotaDID) -> Result<IotaDocument> {
+  async fn resolve_did<TP: TimeProvider>(&self, did: &IotaDID) -> Result<IotaDocument> {
     validate_network(self, did).await?;
 
     let id: AliasId = AliasId::from(did);
     let (_, alias_output) = self.get_alias_output(id).await?;
-    IotaDocument::unpack_from_output(did, &alias_output, true)
+    IotaDocument::unpack_from_output::<TP>(did, &alias_output, true)
   }
 
   /// Fetches the [`AliasOutput`] associated with the given DID.

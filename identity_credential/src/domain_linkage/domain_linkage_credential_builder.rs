@@ -7,7 +7,7 @@ use crate::credential::Subject;
 use crate::domain_linkage::DomainLinkageConfiguration;
 use crate::error::Result;
 use crate::Error;
-use identity_core::common::Object;
+use identity_core::common::{Object, TimeProvider};
 use identity_core::common::OneOrMany;
 use identity_core::common::Timestamp;
 use identity_core::common::Url;
@@ -69,7 +69,7 @@ impl DomainLinkageCredentialBuilder {
   }
 
   /// Returns a new `Credential` based on the `DomainLinkageCredentialBuilder` configuration.
-  pub fn build(self) -> Result<Credential<Object>> {
+  pub fn build<TP: TimeProvider>(self) -> Result<Credential<Object>> {
     let origin: Url = self.origin.ok_or(Error::MissingOrigin)?;
     if origin.domain().is_none() {
       return Err(Error::DomainLinkageError(
@@ -98,7 +98,7 @@ impl DomainLinkageCredentialBuilder {
       ]),
       credential_subject: OneOrMany::One(Subject::with_id_and_properties(issuer.clone(), properties)),
       issuer: Issuer::Url(issuer),
-      issuance_date: self.issuance_date.unwrap_or_else(Timestamp::now_utc),
+      issuance_date: self.issuance_date.unwrap_or_else(TP::now_utc),
       expiration_date: Some(self.expiration_date.ok_or(Error::MissingExpirationDate)?),
       credential_status: None,
       credential_schema: Vec::new().into(),
@@ -118,7 +118,7 @@ mod tests {
   use crate::domain_linkage::DomainLinkageCredentialBuilder;
   use crate::error::Result;
   use crate::Error;
-  use identity_core::common::Timestamp;
+  use identity_core::common::{DefaultTimeProvider, TimeProvider, Timestamp};
   use identity_core::common::Url;
   use identity_did::CoreDID;
 

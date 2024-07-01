@@ -27,6 +27,7 @@ use iota_sdk::types::block::address::Bech32Address;
 use iota_sdk::types::block::address::Hrp;
 use rand::distributions::DistString;
 use serde_json::Value;
+use identity_iota::core::DefaultTimeProvider;
 
 pub static API_ENDPOINT: &str = "http://localhost";
 pub static FAUCET_ENDPOINT: &str = "http://localhost/faucet/api/enqueue";
@@ -52,7 +53,7 @@ pub async fn create_did(
 
   let alias_output: AliasOutput = client.new_did_output(address, document, None).await?;
 
-  let document: IotaDocument = client.publish_did_output(secret_manager, alias_output).await?;
+  let document: IotaDocument = client.publish_did_output::<DefaultTimeProvider>(secret_manager, alias_output).await?;
 
   Ok((address, document, fragment))
 }
@@ -65,7 +66,7 @@ pub async fn create_did_document(
   network_name: &NetworkName,
   storage: &MemStorage,
 ) -> anyhow::Result<(IotaDocument, String)> {
-  let mut document: IotaDocument = IotaDocument::new(network_name);
+  let mut document: IotaDocument = IotaDocument::new::<DefaultTimeProvider>(network_name);
 
   let fragment: String = document
     .generate_method(

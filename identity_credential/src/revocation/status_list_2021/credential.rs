@@ -5,7 +5,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
 
-use identity_core::common::Context;
+use identity_core::common::{Context, TimeProvider};
 use identity_core::common::OneOrMany;
 use identity_core::common::Timestamp;
 use identity_core::common::Url;
@@ -387,7 +387,7 @@ impl StatusList2021CredentialBuilder {
   }
 
   /// Consumes this [`StatusList2021CredentialBuilder`] into a [`StatusList2021Credential`].
-  pub fn build(mut self) -> Result<StatusList2021Credential, crate::Error> {
+  pub fn build<TP: TimeProvider>(mut self) -> Result<StatusList2021Credential, crate::Error> {
     let id = self.credential_subject.id.clone().map(|mut url| {
       url.set_fragment(None);
       url
@@ -396,12 +396,12 @@ impl StatusList2021CredentialBuilder {
     self
       .inner_builder
       .type_(CREDENTIAL_TYPE)
-      .issuance_date(Timestamp::now_utc())
+      .issuance_date(TP::now_utc())
       .subject(Subject {
         id: self.credential_subject.id.clone(),
         ..Default::default()
       })
-      .build()
+      .build::<TP>()
       .map(|mut credential| {
         credential.credential_subject = OneOrMany::default();
         StatusList2021Credential {

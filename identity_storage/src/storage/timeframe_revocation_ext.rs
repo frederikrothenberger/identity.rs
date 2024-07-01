@@ -8,7 +8,7 @@ use crate::MethodDigest;
 use crate::Storage;
 use crate::StorageResult;
 use async_trait::async_trait;
-use identity_core::common::Duration;
+use identity_core::common::{Duration, TimeProvider};
 use identity_core::common::Timestamp;
 use identity_credential::credential::Jpt;
 use identity_credential::revocation::RevocationTimeframeStatus;
@@ -44,27 +44,7 @@ pub struct ProofUpdateCtx {
 #[cfg_attr(feature = "send-sync-storage", async_trait)]
 pub trait TimeframeRevocationExtension {
   /// Update Credential' signature considering the Timeframe interval
-  async fn update<K, I>(
-    &self,
-    storage: &Storage<K, I>,
-    fragment: &str,
-    start_validity: Option<Timestamp>,
-    duration: Duration,
-    credential_jwp: &mut JwpIssued,
-  ) -> StorageResult<Jpt>
-  where
-    K: JwkStorageBbsPlusExt,
-    I: KeyIdStorage;
-}
-
-// ====================================================================================================================
-// CoreDocument
-// ====================================================================================================================
-
-#[cfg_attr(not(feature = "send-sync-storage"), async_trait(?Send))]
-#[cfg_attr(feature = "send-sync-storage", async_trait)]
-impl TimeframeRevocationExtension for CoreDocument {
-  async fn update<K, I>(
+  async fn update<K, I, TP>(
     &self,
     storage: &Storage<K, I>,
     fragment: &str,
@@ -75,6 +55,28 @@ impl TimeframeRevocationExtension for CoreDocument {
   where
     K: JwkStorageBbsPlusExt,
     I: KeyIdStorage,
+    TP: TimeProvider;
+}
+
+// ====================================================================================================================
+// CoreDocument
+// ====================================================================================================================
+
+#[cfg_attr(not(feature = "send-sync-storage"), async_trait(?Send))]
+#[cfg_attr(feature = "send-sync-storage", async_trait)]
+impl TimeframeRevocationExtension for CoreDocument {
+  async fn update<K, I, TP>(
+    &self,
+    storage: &Storage<K, I>,
+    fragment: &str,
+    start_validity: Option<Timestamp>,
+    duration: Duration,
+    credential_jwp: &mut JwpIssued,
+  ) -> StorageResult<Jpt>
+  where
+    K: JwkStorageBbsPlusExt,
+    I: KeyIdStorage,
+    TP: TimeProvider,
   {
     // Obtain the method corresponding to the given fragment.
     let method: &VerificationMethod = self.resolve_method(fragment, None).ok_or(Error::MethodNotFound)?;
@@ -88,7 +90,7 @@ impl TimeframeRevocationExtension for CoreDocument {
       .await
       .map_err(Error::KeyIdStorageError)?;
 
-    let new_start_validity_timeframe = start_validity.unwrap_or(Timestamp::now_utc());
+    let new_start_validity_timeframe = start_validity.unwrap_or_else(TP::now_utc);
     let new_end_validity_timeframe = new_start_validity_timeframe
       .checked_add(duration)
       .ok_or(Error::ProofUpdateError("Invalid granularity".to_owned()))?;
@@ -177,7 +179,7 @@ mod iota_document {
   #[cfg_attr(not(feature = "send-sync-storage"), async_trait(?Send))]
   #[cfg_attr(feature = "send-sync-storage", async_trait)]
   impl TimeframeRevocationExtension for IotaDocument {
-    async fn update<K, I>(
+    async fn update<K, I, TP>(
       &self,
       storage: &Storage<K, I>,
       fragment: &str,
@@ -188,10 +190,11 @@ mod iota_document {
     where
       K: JwkStorageBbsPlusExt,
       I: KeyIdStorage,
+      TP: TimeProvider,
     {
       self
         .core_document()
-        .update(storage, fragment, start_validity, duration, credential_jwp)
+        .update::<K, I, TP>(storage, fragment, start_validity, duration, credential_jwp)
         .await
     }
   }

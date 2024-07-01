@@ -9,7 +9,7 @@ use crate::domain_linkage::DomainLinkageValidationErrorCause;
 use crate::validator::FailFast;
 use crate::validator::JwtCredentialValidationOptions;
 use crate::validator::JwtCredentialValidator;
-use identity_core::common::OneOrMany;
+use identity_core::common::{OneOrMany, TimeProvider};
 use identity_core::common::Url;
 use identity_did::CoreDID;
 use identity_document::document::CoreDocument;
@@ -53,7 +53,7 @@ impl<V: JwsVerifier> JwtDomainLinkageValidator<V> {
   ///  - Semantic structure of `configuration` is invalid.
   ///  - `configuration` includes multiple credentials issued by `issuer`.
   ///  - Validation of the matched Domain Linkage Credential fails.
-  pub fn validate_linkage<DOC: AsRef<CoreDocument>>(
+  pub fn validate_linkage<DOC: AsRef<CoreDocument>, TP: TimeProvider>(
     &self,
     issuer: &DOC,
     configuration: &DomainLinkageConfiguration,
@@ -92,7 +92,7 @@ impl<V: JwsVerifier> JwtDomainLinkageValidator<V> {
         source: None,
       })?;
 
-    self.validate_credential(issuer, credential, domain, validation_options)
+    self.validate_credential::<DOC, TP>(issuer, credential, domain, validation_options)
   }
 
   /// Validates a [Domain Linkage Credential](https://identity.foundation/.well-known/resources/did-configuration/#domain-linkage-credential).
@@ -100,7 +100,7 @@ impl<V: JwsVerifier> JwtDomainLinkageValidator<V> {
   /// *`issuer`: issuer of the credential.
   /// *`credential`: domain linkage Credential to be verified.
   /// *`domain`: the domain hosting the credential.
-  pub fn validate_credential<DOC: AsRef<CoreDocument>>(
+  pub fn validate_credential<DOC: AsRef<CoreDocument>, TP: TimeProvider>(
     &self,
     issuer: &DOC,
     credential: &Jwt,
@@ -109,7 +109,7 @@ impl<V: JwsVerifier> JwtDomainLinkageValidator<V> {
   ) -> DomainLinkageValidationResult {
     let decoded_credential: DecodedJwtCredential = self
       .validator
-      .validate(credential, issuer, validation_options, FailFast::AllErrors)
+      .validate::<_, _, TP>(credential, issuer, validation_options, FailFast::AllErrors)
       .map_err(|err| DomainLinkageValidationError {
         cause: DomainLinkageValidationErrorCause::CredentialValidationError,
         source: Some(Box::new(err)),

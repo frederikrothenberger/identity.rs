@@ -13,6 +13,8 @@ pub use self::ordered_set::OrderedSet;
 pub use self::single_struct_error::*;
 pub use self::timestamp::Duration;
 pub use self::timestamp::Timestamp;
+pub use self::timestamp::TimeProvider;
+pub use self::timestamp::DefaultTimeProvider;
 pub use self::url::Url;
 
 mod context;

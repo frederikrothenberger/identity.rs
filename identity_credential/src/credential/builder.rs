@@ -1,7 +1,7 @@
 // Copyright 2020-2022 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use identity_core::common::Context;
+use identity_core::common::{Context, TimeProvider};
 use identity_core::common::Object;
 use identity_core::common::Timestamp;
 use identity_core::common::Url;
@@ -169,8 +169,8 @@ impl<T> CredentialBuilder<T> {
   }
 
   /// Returns a new `Credential` based on the `CredentialBuilder` configuration.
-  pub fn build(self) -> Result<Credential<T>> {
-    Credential::from_builder(self)
+  pub fn build<TP: TimeProvider>(self) -> Result<Credential<T>> {
+    Credential::from_builder::<TP>(self)
   }
 }
 

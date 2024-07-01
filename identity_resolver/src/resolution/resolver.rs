@@ -258,6 +258,7 @@ mod iota_handler {
   use identity_iota_core::IotaIdentityClientExt;
   use std::collections::HashMap;
   use std::sync::Arc;
+  use identity_core::common::TimeProvider;
 
   impl<DOC> Resolver<DOC>
   where
@@ -266,15 +267,16 @@ mod iota_handler {
     /// Convenience method for attaching a new handler responsible for resolving IOTA DIDs.
     ///
     /// See also [`attach_handler`](Self::attach_handler).
-    pub fn attach_iota_handler<CLI>(&mut self, client: CLI)
+    pub fn attach_iota_handler<CLI, TP>(&mut self, client: CLI)
     where
       CLI: IotaIdentityClientExt + Send + Sync + 'static,
+      TP: TimeProvider,
     {
       let arc_client: Arc<CLI> = Arc::new(client);
 
       let handler = move |did: IotaDID| {
         let future_client = arc_client.clone();
-        async move { future_client.resolve_did(&did).await }
+        async move { future_client.resolve_did::<TP>(&did).await }
       };
 
       self.attach_handler(IotaDID::METHOD.to_owned(), handler);
@@ -305,10 +307,11 @@ mod iota_handler {
     /// previously added clients.
     /// - This function does not validate the provided configuration. Ensure that the provided
     /// network name corresponds with the client, possibly by using `client.network_name()`.
-    pub fn attach_multiple_iota_handlers<CLI, I>(&mut self, clients: I)
+    pub fn attach_multiple_iota_handlers<CLI, I, TP>(&mut self, clients: I)
     where
       CLI: IotaIdentityClientExt + Send + Sync + 'static,
       I: IntoIterator<Item = (&'static str, CLI)>,
+      TP: TimeProvider,
     {
       let arc_clients = Arc::new(clients.into_iter().collect::<HashMap<&'static str, CLI>>());
 
@@ -323,7 +326,7 @@ mod iota_handler {
                 did_network.to_string(),
               )))?;
           client
-            .resolve_did(&did)
+            .resolve_did::<TP>(&did)
             .await
             .map_err(|err| crate::Error::new(ErrorCause::HandlerError { source: Box::new(err) }))
         }
@@ -358,6 +361,7 @@ where
 
 #[cfg(test)]
 mod tests {
+  use identity_core::common::TimeProvider;
   use identity_iota_core::block::output::AliasId;
   use identity_iota_core::block::output::AliasOutput;
   use identity_iota_core::block::output::OutputId;
@@ -383,7 +387,7 @@ mod tests {
 
   #[async_trait::async_trait]
   impl IotaIdentityClientExt for DummyClient {
-    async fn resolve_did(&self, did: &IotaDID) -> identity_iota_core::Result<IotaDocument> {
+    async fn resolve_did<TP: TimeProvider>(&self, did: &IotaDID) -> identity_iota_core::Result<IotaDocument> {
       if self.0.id().as_str() == did.as_str() {
         Ok(self.0.clone())
       } else {

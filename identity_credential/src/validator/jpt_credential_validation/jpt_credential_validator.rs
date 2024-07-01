@@ -11,7 +11,7 @@ use jsonprooftoken::encoding::SerializationType;
 use jsonprooftoken::jpt::claims::JptClaims;
 use jsonprooftoken::jwk::key::Jwk as JwkExt;
 use jsonprooftoken::jwp::issued::JwpIssuedDecoder;
-
+use identity_core::common::TimeProvider;
 use super::DecodedJptCredential;
 use crate::credential::Credential;
 use crate::credential::CredentialJwtClaims;
@@ -36,7 +36,7 @@ impl JptCredentialValidator {
   /// - the expiration date,
   /// - the issuance date,
   /// - the semantic structure.
-  pub fn validate<DOC, T>(
+  pub fn validate<TP, DOC, T>(
     credential_jpt: &Jpt,
     issuer: &DOC,
     options: &JptCredentialValidationOptions,
@@ -45,6 +45,7 @@ impl JptCredentialValidator {
   where
     T: ToOwned<Owned = T> + serde::Serialize + serde::de::DeserializeOwned,
     DOC: AsRef<CoreDocument>,
+    TP: TimeProvider
   {
     // First verify the JWP proof and decode the result into a credential token, then apply all other validations.
     let credential_token =
@@ -56,31 +57,32 @@ impl JptCredentialValidator {
 
     let credential: &Credential<T> = &credential_token.credential;
 
-    Self::validate_credential::<T>(credential, options, fail_fast)?;
+    Self::validate_credential::<TP,T>(credential, options, fail_fast)?;
 
     Ok(credential_token)
   }
 
-  pub(crate) fn validate_credential<T>(
+  pub(crate) fn validate_credential<TP, T>(
     credential: &Credential<T>,
     options: &JptCredentialValidationOptions,
     fail_fast: FailFast,
   ) -> Result<(), CompoundCredentialValidationError>
   where
     T: ToOwned<Owned = T> + serde::Serialize + serde::de::DeserializeOwned,
+    TP: TimeProvider
   {
     // Run all single concern Credential validations in turn and fail immediately if `fail_fast` is true.
     let expiry_date_validation = std::iter::once_with(|| {
       JwtCredentialValidatorUtils::check_expires_on_or_after(
         credential,
-        options.earliest_expiry_date.unwrap_or_default(),
+        options.earliest_expiry_date.unwrap_or_else(TP::now_utc),
       )
     });
 
     let issuance_date_validation = std::iter::once_with(|| {
       JwtCredentialValidatorUtils::check_issued_on_or_before(
         credential,
-        options.latest_issuance_date.unwrap_or_default(),
+        options.latest_issuance_date.unwrap_or_else(TP::now_utc),
       )
     });
 

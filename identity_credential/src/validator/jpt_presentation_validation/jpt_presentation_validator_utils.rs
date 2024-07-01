@@ -3,7 +3,7 @@
 
 use std::str::FromStr;
 
-use identity_core::common::Object;
+use identity_core::common::{Object, TimeProvider};
 use identity_core::common::Timestamp;
 use identity_core::convert::FromJson;
 use identity_core::convert::ToJson;
@@ -67,7 +67,7 @@ impl JptPresentationValidatorUtils {
   }
 
   /// Check timeframe interval in credentialStatus with `RevocationTimeframeStatus`.
-  pub fn check_timeframes_with_validity_timeframe_2024<T>(
+  pub fn check_timeframes_with_validity_timeframe_2024<TP: TimeProvider, T>(
     credential: &Credential<T>,
     validity_timeframe: Option<Timestamp>,
     status_check: crate::validator::StatusCheck,
@@ -83,7 +83,7 @@ impl JptPresentationValidatorUtils {
           let status: VerifierRevocationTimeframeStatus =
             VerifierRevocationTimeframeStatus::try_from(status.clone()).map_err(JwtValidationError::InvalidStatus)?;
 
-          JptCredentialValidatorUtils::check_validity_timeframe(status.0, validity_timeframe)
+          JptCredentialValidatorUtils::check_validity_timeframe::<TP>(status.0, validity_timeframe)
         } else {
           if status_check == crate::validator::StatusCheck::SkipUnsupported {
             return Ok(());

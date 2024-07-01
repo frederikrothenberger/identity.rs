@@ -64,8 +64,8 @@ impl RevocationTimeframeStatus {
   const INDEX_PROPERTY: &'static str = "revocationBitmapIndex";
 
   /// Creates a new `RevocationTimeframeStatus`.
-  pub fn new(start_validity: Option<Timestamp>, duration: Duration, id: Url, index: u32) -> Result<Self> {
-    let start_validity_timeframe = start_validity.unwrap_or(Timestamp::now_utc());
+  pub fn new(start_validity: Timestamp, duration: Duration, id: Url, index: u32) -> Result<Self> {
+    let start_validity_timeframe = start_validity;
     let end_validity_timeframe = start_validity_timeframe
       .checked_add(duration)
       .ok_or(Error::InvalidStatus(
@@ -190,7 +190,7 @@ mod tests {
     let start_validity_timeframe = Timestamp::parse("2024-03-19T13:57:50Z")?;
 
     Ok(RevocationTimeframeStatus::new(
-      Some(start_validity_timeframe),
+      start_validity_timeframe,
       duration,
       service_url,
       credential_index,

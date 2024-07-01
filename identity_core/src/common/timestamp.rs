@@ -38,27 +38,6 @@ impl Timestamp {
     Ok(Timestamp(truncate_fractional_seconds(offset_date_time)))
   }
 
-  /// Creates a new `Timestamp` with the current date and time, normalized to UTC+00:00 with
-  /// fractional seconds truncated.
-  ///
-  /// See the [`datetime` DID-core specification](https://www.w3.org/TR/did-core/#production).
-  #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-  pub fn now_utc() -> Self {
-    Self(truncate_fractional_seconds(OffsetDateTime::now_utc()))
-  }
-
-  /// Creates a new `Timestamp` with the current date and time, normalized to UTC+00:00 with
-  /// fractional seconds truncated.
-  ///
-  /// See the [`datetime` DID-core specification](https://www.w3.org/TR/did-core/#production).
-  #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-  pub fn now_utc() -> Self {
-    let milliseconds_since_unix_epoch: i64 = js_sys::Date::now() as i64;
-    let seconds: i64 = milliseconds_since_unix_epoch / 1000;
-    // expect is okay, we assume the current time is between 0AD and 9999AD
-    Self::from_unix(seconds).expect("Timestamp failed to convert system datetime")
-  }
-
   /// Returns the `Timestamp` as an [RFC 3339](https://tools.ietf.org/html/rfc3339) `String`.
   pub fn to_rfc3339(&self) -> String {
     // expect is okay, constructors ensure RFC 3339 compatible timestamps.
@@ -111,12 +90,6 @@ impl Timestamp {
       .0
       .checked_sub(duration.0)
       .and_then(|offset_date_time| Self::from_unix(offset_date_time.unix_timestamp()).ok())
-  }
-}
-
-impl Default for Timestamp {
-  fn default() -> Self {
-    Self::now_utc()
   }
 }
 
@@ -218,9 +191,32 @@ impl Duration {
   }
 }
 
+pub trait TimeProvider {
+  fn now_utc() -> Timestamp;
+}
+
+pub struct DefaultTimeProvider;
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+impl TimeProvider for DefaultTimeProvider {
+  fn now_utc() -> Timestamp {
+    Timestamp(truncate_fractional_seconds(OffsetDateTime::now_utc()))
+  }
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+impl TimeProvider for DefaultTimeProvider {
+  fn now_utc() -> Timestamp {
+    let milliseconds_since_unix_epoch: i64 = js_sys::Date::now() as i64;
+    let seconds: i64 = milliseconds_since_unix_epoch / 1000;
+    // expect is okay, we assume the current time is between 0AD and 9999AD
+    Timestamp::from_unix(seconds).expect("Timestamp failed to convert system datetime")
+  }
+}
+
 #[cfg(test)]
 mod tests {
-  use crate::common::Timestamp;
+  use crate::common::{DefaultTimeProvider, TimeProvider, Timestamp};
   use crate::convert::FromJson;
   use crate::convert::ToJson;
   use proptest::proptest;
@@ -354,7 +350,7 @@ mod tests {
 
   #[test]
   fn test_json_vec_roundtrip() {
-    let time1: Timestamp = Timestamp::now_utc();
+    let time1: Timestamp = DefaultTimeProvider::now_utc();
     let json: Vec<u8> = time1.to_json_vec().unwrap();
     let time2: Timestamp = Timestamp::from_json_slice(&json).unwrap();
 
@@ -363,7 +359,7 @@ mod tests {
 
   #[test]
   fn test_json_value_roundtrip() {
-    let time1: Timestamp = Timestamp::now_utc();
+    let time1: Timestamp = DefaultTimeProvider::now_utc();
     let json: serde_json::Value = time1.to_json_value().unwrap();
     let time2: Timestamp = Timestamp::from_json_value(json).unwrap();
 

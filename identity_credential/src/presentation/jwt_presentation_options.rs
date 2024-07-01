@@ -1,7 +1,7 @@
 // Copyright 2020-2023 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
-use identity_core::common::Object;
+use identity_core::common::{Object, TimeProvider};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -43,13 +43,11 @@ impl JwtPresentationOptions {
     self.audience = Some(audience);
     self
   }
-}
 
-impl Default for JwtPresentationOptions {
-  fn default() -> Self {
+  fn new<TP: TimeProvider>() -> Self {
     Self {
       expiration_date: None,
-      issuance_date: Some(Timestamp::now_utc()),
+      issuance_date: Some(TP::now_utc()),
       audience: None,
       custom_claims: None,
     }

@@ -7,7 +7,7 @@ use iota_sdk::client::api::input_selection::Burn;
 use iota_sdk::client::secret::SecretManager;
 use iota_sdk::client::Client;
 use iota_sdk::types::block::protocol::ProtocolParameters;
-
+use identity_core::common::TimeProvider;
 use crate::block::address::Address;
 use crate::block::output::unlock_condition::AddressUnlockCondition;
 use crate::block::output::AliasId;
@@ -39,7 +39,7 @@ pub trait IotaClientExt: IotaIdentityClient {
   /// the storage deposit amount specified on `alias_output`.
   ///
   /// This method modifies the on-ledger state.
-  async fn publish_did_output(&self, secret_manager: &SecretManager, alias_output: AliasOutput)
+  async fn publish_did_output<TP: TimeProvider>(&self, secret_manager: &SecretManager, alias_output: AliasOutput)
     -> Result<IotaDocument>;
 
   /// Destroy the Alias Output containing the given `did`, sending its tokens to a new Basic Output
@@ -56,7 +56,7 @@ pub trait IotaClientExt: IotaIdentityClient {
 #[cfg_attr(feature = "send-sync-client-ext", async_trait::async_trait)]
 #[cfg_attr(not(feature = "send-sync-client-ext"), async_trait::async_trait(?Send))]
 impl IotaClientExt for Client {
-  async fn publish_did_output(
+  async fn publish_did_output<TP: TimeProvider>(
     &self,
     secret_manager: &SecretManager,
     alias_output: AliasOutput,
@@ -66,7 +66,7 @@ impl IotaClientExt for Client {
       .map_err(|err| Error::DIDUpdateError("publish_did_output: publish failed", Some(Box::new(err))))?;
     let network: NetworkName = self.network_name().await?;
 
-    IotaDocument::unpack_from_block(&network, &block)?
+    IotaDocument::unpack_from_block::<TP>(&network, &block)?
       .into_iter()
       .next()
       .ok_or(Error::DIDUpdateError(

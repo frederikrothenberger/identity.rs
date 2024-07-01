@@ -6,7 +6,7 @@ use crate::revocation::RevocationDocumentExt;
 use crate::revocation::RevocationTimeframeStatus;
 use std::str::FromStr;
 
-use identity_core::common::Object;
+use identity_core::common::{Object, TimeProvider};
 use identity_core::common::Timestamp;
 use identity_core::convert::FromJson;
 use identity_core::convert::ToJson;
@@ -82,7 +82,7 @@ impl JptCredentialValidatorUtils {
   }
 
   /// Check timeframe interval in credentialStatus with `RevocationTimeframeStatus`.
-  pub fn check_timeframes_with_validity_timeframe_2024<T>(
+  pub fn check_timeframes_with_validity_timeframe_2024<TP: TimeProvider, T>(
     credential: &Credential<T>,
     validity_timeframe: Option<Timestamp>,
     status_check: crate::validator::StatusCheck,
@@ -98,7 +98,7 @@ impl JptCredentialValidatorUtils {
           let status: RevocationTimeframeStatus =
             RevocationTimeframeStatus::try_from(status).map_err(JwtValidationError::InvalidStatus)?;
 
-          Self::check_validity_timeframe(status, validity_timeframe)
+          Self::check_validity_timeframe::<TP>(status, validity_timeframe)
         } else {
           if status_check == crate::validator::StatusCheck::SkipUnsupported {
             return Ok(());
@@ -112,11 +112,11 @@ impl JptCredentialValidatorUtils {
     }
   }
 
-  pub(crate) fn check_validity_timeframe(
+  pub(crate) fn check_validity_timeframe<TP: TimeProvider>(
     status: RevocationTimeframeStatus,
     validity_timeframe: Option<Timestamp>,
   ) -> ValidationUnitResult {
-    let timeframe = validity_timeframe.unwrap_or(Timestamp::now_utc());
+    let timeframe = validity_timeframe.unwrap_or_else(TP::now_utc);
 
     let check = timeframe >= status.start_validity_timeframe() && timeframe <= status.end_validity_timeframe();
 
@@ -196,6 +196,7 @@ impl JptCredentialValidatorUtils {
   pub fn check_timeframes_and_revocation_with_validity_timeframe_2024<
     DOC: AsRef<identity_document::document::CoreDocument> + ?Sized,
     T,
+    TP: TimeProvider
   >(
     credential: &Credential<T>,
     issuer: &DOC,
@@ -215,7 +216,7 @@ impl JptCredentialValidatorUtils {
 
           let revocation = std::iter::once_with(|| Self::check_revocation_bitmap(issuer, status.clone()));
 
-          let timeframes = std::iter::once_with(|| Self::check_validity_timeframe(status.clone(), validity_timeframe));
+          let timeframes = std::iter::once_with(|| Self::check_validity_timeframe::<TP>(status.clone(), validity_timeframe));
 
           let checks_iter = revocation.chain(timeframes);
 

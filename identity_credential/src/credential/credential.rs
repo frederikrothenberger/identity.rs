@@ -11,7 +11,7 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde::Serialize;
 
-use identity_core::common::Context;
+use identity_core::common::{Context, TimeProvider};
 use identity_core::common::Object;
 use identity_core::common::OneOrMany;
 use identity_core::common::Timestamp;
@@ -104,14 +104,14 @@ impl<T> Credential<T> {
   }
 
   /// Returns a new `Credential` based on the `CredentialBuilder` configuration.
-  pub fn from_builder(builder: CredentialBuilder<T>) -> Result<Self> {
+  pub fn from_builder<TP: TimeProvider>(builder: CredentialBuilder<T>) -> Result<Self> {
     let this: Self = Self {
       context: builder.context.into(),
       id: builder.id,
       types: builder.types.into(),
       credential_subject: builder.subject.into(),
       issuer: builder.issuer.ok_or(Error::MissingIssuer)?,
-      issuance_date: builder.issuance_date.unwrap_or_default(),
+      issuance_date: builder.issuance_date.unwrap_or_else(TP::now_utc),
       expiration_date: builder.expiration_date,
       credential_status: builder.status,
       credential_schema: builder.schema.into(),

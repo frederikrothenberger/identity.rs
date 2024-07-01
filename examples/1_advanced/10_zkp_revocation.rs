@@ -7,7 +7,7 @@ use examples::MemStorage;
 use examples::API_ENDPOINT;
 use examples::FAUCET_ENDPOINT;
 use identity_eddsa_verifier::EdDSAJwsVerifier;
-use identity_iota::core::json;
+use identity_iota::core::{DefaultTimeProvider, json, TimeProvider};
 use identity_iota::core::Duration;
 use identity_iota::core::FromJson;
 use identity_iota::core::Object;
@@ -192,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
 
   let start_validity_timeframe = Timestamp::now_utc();
   let status: Status = RevocationTimeframeStatus::new(
-    Some(start_validity_timeframe),
+    start_validity_timeframe,
     duration,
     service_url.into(),
     credential_index,
@@ -220,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
 
   // Validate the credential's proof using the issuer's DID Document, the credential's semantic structure,
   // that the issuance date is not in the future and that the expiration date is not in the past:
-  let decoded_jpt = JptCredentialValidator::validate::<_, Object>(
+  let decoded_jpt = JptCredentialValidator::validate::<DefaultTimeProvider,_, Object>(
     &credential_jpt,
     &issuer_document,
     &JptCredentialValidationOptions::default(),
@@ -238,7 +238,7 @@ async fn main() -> anyhow::Result<()> {
 
   // Holder validate the credential and retrieve the JwpIssued, needed to construct the JwpPresented
 
-  let validation_result = JptCredentialValidator::validate::<_, Object>(
+  let validation_result = JptCredentialValidator::validate::<DefaultTimeProvider, _, Object>(
     &credential_jpt,
     &issuer_document,
     &JptCredentialValidationOptions::default(),
@@ -442,7 +442,7 @@ async fn main() -> anyhow::Result<()> {
 
   // Issuer checks the Credential integrity.
   let mut verified_credential_result =
-    JptCredentialValidator::validate::<_, Object>(jpt_vc, &issuer_document, &validation_options, FailFast::FirstError)
+    JptCredentialValidator::validate::<_, Object, DefaultTimeProvider>(jpt_vc, &issuer_document, &validation_options, FailFast::FirstError)
       .unwrap();
 
   // Issuer checks if the Credential has been revoked
@@ -484,7 +484,7 @@ async fn main() -> anyhow::Result<()> {
 
   // Holder check validity of the updated credential
 
-  let validation_result = JptCredentialValidator::validate::<_, Object>(
+  let validation_result = JptCredentialValidator::validate::<_, Object, DefaultTimeProvider>(
     &new_credential_jpt,
     &issuer_document,
     &JptCredentialValidationOptions::default(),

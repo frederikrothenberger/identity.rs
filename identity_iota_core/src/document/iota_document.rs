@@ -13,7 +13,7 @@ use identity_verification::jose::jws::JwsVerifier;
 use serde::Deserialize;
 use serde::Serialize;
 
-use identity_core::common::Object;
+use identity_core::common::{Object, TimeProvider};
 use identity_core::common::OneOrSet;
 use identity_core::common::OrderedSet;
 use identity_core::common::Url;
@@ -94,18 +94,18 @@ impl IotaDocument {
   /// Constructs an empty DID Document with a [`IotaDID::placeholder`] identifier
   /// for the given `network`.
   // TODO: always take Option<NetworkName> or `new_with_options` for a particular network?
-  pub fn new(network: &NetworkName) -> Self {
-    Self::new_with_id(IotaDID::placeholder(network))
+  pub fn new<TP: TimeProvider>(network: &NetworkName) -> Self {
+    Self::new_with_id::<TP>(IotaDID::placeholder(network))
   }
 
   /// Constructs an empty DID Document with the given identifier.
-  pub fn new_with_id(id: IotaDID) -> Self {
+  pub fn new_with_id<TP: TimeProvider>(id: IotaDID) -> Self {
     // PANIC: constructing an empty DID Document is infallible, caught by tests otherwise.
     let document: CoreDocument = CoreDocument::builder(Object::default())
       .id(id.into())
       .build()
       .expect("empty IotaDocument constructor failed");
-    let metadata: IotaDocumentMetadata = IotaDocumentMetadata::new();
+    let metadata: IotaDocumentMetadata = IotaDocumentMetadata::new::<TP>();
     Self { document, metadata }
   }
 
@@ -426,9 +426,9 @@ mod client_document {
     /// NOTE: `did` is required since it is omitted from the serialized DID Document and
     /// cannot be inferred from the state metadata. It also indicates the network, which is not
     /// encoded in the `AliasId` alone.
-    pub fn unpack_from_output(did: &IotaDID, alias_output: &AliasOutput, allow_empty: bool) -> Result<IotaDocument> {
+    pub fn unpack_from_output<TP: TimeProvider>(did: &IotaDID, alias_output: &AliasOutput, allow_empty: bool) -> Result<IotaDocument> {
       let mut document: IotaDocument = if alias_output.state_metadata().is_empty() && allow_empty {
-        let mut empty_document = IotaDocument::new_with_id(did.clone());
+        let mut empty_document = IotaDocument::new_with_id::<TP>(did.clone());
         empty_document.metadata.created = None;
         empty_document.metadata.updated = None;
         empty_document.metadata.deactivated = Some(true);
@@ -473,7 +473,7 @@ mod client_document {
     /// outputs, if any.
     ///
     /// Errors if any Alias Output does not contain a valid or empty DID Document.
-    pub fn unpack_from_block(network: &NetworkName, block: &Block) -> Result<Vec<IotaDocument>> {
+    pub fn unpack_from_block<TP: TimeProvider>(network: &NetworkName, block: &Block) -> Result<Vec<IotaDocument>> {
       let mut documents = Vec::new();
 
       if let Some(Payload::Transaction(tx_payload)) = block.payload() {
@@ -496,7 +496,7 @@ mod client_document {
             };
 
             let did: IotaDID = IotaDID::new(&alias_id, network);
-            documents.push(IotaDocument::unpack_from_output(&did, alias_output, true)?);
+            documents.push(IotaDocument::unpack_from_output::<TP>(&did, alias_output, true)?);
           }
         }
       }

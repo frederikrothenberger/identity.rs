@@ -1,6 +1,7 @@
 // Copyright 2020-2023 IOTA Stiftung
 // SPDX-License-Identifier: Apache-2.0
 
+use identity_core::common::TimeProvider;
 use identity_core::convert::FromJson;
 use identity_did::CoreDID;
 use identity_did::DIDUrl;
@@ -57,7 +58,7 @@ impl<V: JwsVerifier> JwtCredentialValidator<V> {
   ///
   /// # Errors
   /// An error is returned whenever a validated condition is not satisfied.
-  pub fn validate<DOC, T>(
+  pub fn validate<DOC, T, TP>(
     &self,
     credential_jwt: &Jwt,
     issuer: &DOC,
@@ -67,6 +68,7 @@ impl<V: JwsVerifier> JwtCredentialValidator<V> {
   where
     T: ToOwned<Owned = T> + serde::Serialize + serde::de::DeserializeOwned,
     DOC: AsRef<CoreDocument>,
+    TP: TimeProvider
   {
     let credential_token = self
       .verify_signature(
@@ -78,7 +80,7 @@ impl<V: JwsVerifier> JwtCredentialValidator<V> {
         validation_errors: [err].into(),
       })?;
 
-    Self::validate_decoded_credential::<CoreDocument, T>(
+    Self::validate_decoded_credential::<CoreDocument, T, TP>(
       credential_token,
       std::slice::from_ref(issuer.as_ref()),
       options,
@@ -118,7 +120,7 @@ impl<V: JwsVerifier> JwtCredentialValidator<V> {
   // This method takes a slice of issuer's instead of a single issuer in order to better accommodate presentation
   // validation. It also validates the relationship between a holder and the credential subjects when
   // `relationship_criterion` is Some.
-  pub(crate) fn validate_decoded_credential<DOC, T>(
+  pub(crate) fn validate_decoded_credential<DOC, T, TP>(
     credential_token: DecodedJwtCredential<T>,
     issuers: &[DOC],
     options: &JwtCredentialValidationOptions,
@@ -127,6 +129,7 @@ impl<V: JwsVerifier> JwtCredentialValidator<V> {
   where
     T: ToOwned<Owned = T> + serde::Serialize + serde::de::DeserializeOwned,
     DOC: AsRef<CoreDocument>,
+    TP: TimeProvider
   {
     let credential: &Credential<T> = &credential_token.credential;
     // Run all single concern Credential validations in turn and fail immediately if `fail_fast` is true.
@@ -134,14 +137,14 @@ impl<V: JwsVerifier> JwtCredentialValidator<V> {
     let expiry_date_validation = std::iter::once_with(|| {
       JwtCredentialValidatorUtils::check_expires_on_or_after(
         &credential_token.credential,
-        options.earliest_expiry_date.unwrap_or_default(),
+        options.earliest_expiry_date.unwrap_or_else(TP::now_utc),
       )
     });
 
     let issuance_date_validation = std::iter::once_with(|| {
       JwtCredentialValidatorUtils::check_issued_on_or_before(
         credential,
-        options.latest_issuance_date.unwrap_or_default(),
+        options.latest_issuance_date.unwrap_or_else(TP::now_utc),
       )
     });
 
